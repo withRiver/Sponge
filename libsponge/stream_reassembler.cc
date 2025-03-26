@@ -1,5 +1,6 @@
 #include "stream_reassembler.hh"
 
+#include <limits>
 // Dummy implementation of a stream reassembler.
 
 // For Lab 1, please replace with a real implementation that passes the
@@ -15,76 +16,49 @@ using namespace std;
 StreamReassembler::StreamReassembler(const size_t capacity) 
     : _output(capacity)
     , _capacity(capacity)
-    , unass_base(0)
-    , unass_size(0)
-    , _eof(0)
     , buffer(capacity, 0)
-    , bitmap(capacity, 0) {}
+    , bitmap(capacity, 0)
+    , _eof_index(numeric_limits<size_t>::max())
+    , _unass_base(0)
+    , _unass_bytes(0) {}
 
 //! \details This function accepts a substring (aka a segment) of bytes,
 //! possibly out-of-order, from the logical stream, and assembles any newly
 //! contiguous substrings and writes them into the output stream in order.
 void StreamReassembler::push_substring(const string &data, const size_t index, const bool eof) {
+    size_t st = max(index, _unass_base);
+    size_t ed = min(index + data.size(), _unass_base + _capacity - _output.buffer_size());
     if(eof) {
-        _eof = true;
+        _eof_index = index + data.size();
     }
-
-    size_t len = data.length();
-    if(len == 0 && _eof && unass_size == 0) {
-        _output.end_input();
+    if(index + data.size() <= _unass_base) {
+        if(_unass_base == _eof_index) {
+            _output.end_input();
+        }
         return;
     }
-
-    if(index >= unass_base + _capacity) return;
-
-    if(index >= unass_base) {
-        size_t offset = index - unass_base;
-        size_t real_len = min(len, _capacity - _output.buffer_size() - offset);
-        if(real_len < len) {
-            _eof = false;
+    for(size_t i = st - _unass_base, j = st - index; i < ed - _unass_base; ++i, ++j) {
+        if(!bitmap[i]) {
+            buffer[i] = data[j];
+            bitmap[i] = true;
+            ++_unass_bytes;
         }
-        for(size_t i = 0; i < real_len; ++i) {
-            if( !bitmap[i + offset] ) {
-                buffer[i + offset] = data[i];
-                bitmap[i + offset] = true;
-                ++unass_size;
-            }
-        }
-    } else if(index + len > unass_base) {
-        int offset = unass_base - index;
-        size_t real_len = min(len - offset, _capacity - _output.buffer_size());
-        if(real_len < len - offset) {
-            _eof = false;
-        }
-        for(size_t i = 0; i < real_len; ++i) {
-            if( !bitmap[i] ) {
-                buffer[i] = data[i + offset];
-                bitmap[i] = true;
-                ++unass_size;
-            }
-        }
-    }
-
-    string tmp {};
-    while (bitmap.front()) {
-        tmp += buffer.front();
+    } 
+    string out {};
+    while(bitmap.front()) {
+        out += buffer.front();
         buffer.pop_front();
         bitmap.pop_front();
         buffer.push_back(0);
         bitmap.push_back(0);
+        ++_unass_base, --_unass_bytes;
     }
-    if(tmp.length() > 0) {
-        _output.write(tmp);
-        unass_base += tmp.length();
-        unass_size -= tmp.length();
-    }
-
-    if(_eof && unass_size == 0) {
+    _output.write(out);
+    if(_unass_base == _eof_index) {
         _output.end_input();
     }
-
 }
 
-size_t StreamReassembler::unassembled_bytes() const { return unass_size; }
+size_t StreamReassembler::unassembled_bytes() const { return _unass_bytes; }
 
-bool StreamReassembler::empty() const { return unass_size == 0; }
+bool StreamReassembler::empty() const { return _unass_bytes == 0; }
