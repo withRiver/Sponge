@@ -29,14 +29,53 @@ void Router::add_route(const uint32_t route_prefix,
     cerr << "DEBUG: adding route " << Address::from_ipv4_numeric(route_prefix).ip() << "/" << int(prefix_length)
          << " => " << (next_hop.has_value() ? next_hop->ip() : "(direct)") << " on interface " << interface_num << "\n";
 
-    DUMMY_CODE(route_prefix, prefix_length, next_hop, interface_num);
-    // Your code here.
+    _routing_table.emplace_back(route_prefix, prefix_length, next_hop, interface_num);
+}
+
+// finally not used
+uint8_t Router::leading_zero(uint32_t n) {
+    if (n == 0) return 32;
+    int count = 0;
+    if (n <= 0x0000FFFF) { count += 16; n <<= 16; }
+    if (n <= 0x00FFFFFF) { count += 8; n <<= 8; }
+    if (n <= 0x0FFFFFFF) { count += 4; n <<= 4; }
+    if (n <= 0x3FFFFFFF) { count += 2; n <<= 2; }
+    if (n <= 0x7FFFFFFF) { count += 1; }
+    return count;
 }
 
 //! \param[in] dgram The datagram to be routed
 void Router::route_one_datagram(InternetDatagram &dgram) {
-    DUMMY_CODE(dgram);
-    // Your code here.
+    uint32_t ip_addr = dgram.header().dst;
+    uint8_t max_match = 0;
+    std::optional<Route> chosen_route;
+    for(auto& route : _routing_table) {
+        if (route.prefix_length == 0
+        || (route.route_prefix ^ ip_addr) >> (32 - route.prefix_length) == 0) {
+            if (!chosen_route.has_value() || route.prefix_length > max_match) {
+                max_match = route.prefix_length;
+                chosen_route = route;
+            }
+        }
+    }
+
+    if (!chosen_route.has_value()) {
+        return;
+    }
+
+    if (dgram.header().ttl <= 1) {
+        return;
+    } 
+
+    dgram.header().ttl -= 1;
+
+    size_t interface_num = chosen_route.value().interface_num;
+    std::optional<Address> next_hop = chosen_route.value().next_hop;
+    if (next_hop.has_value()) 
+        interface(interface_num).send_datagram(dgram, next_hop.value());
+    else {
+        interface(interface_num).send_datagram(dgram, Address::from_ipv4_numeric(ip_addr));
+    }
 }
 
 void Router::route() {
